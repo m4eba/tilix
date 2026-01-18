@@ -1142,6 +1142,13 @@ public:
     }
 
     /**
+     * Returns all terminals in this session.
+     */
+    Terminal[] getTerminals() {
+        return terminals;
+    }
+
+    /**
      * Called when the session becomes active,
      * i.e. is visible to the user
      *

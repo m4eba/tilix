@@ -4200,6 +4200,14 @@ public:
         return _terminalUUID;
     }
 
+    /**
+     * Returns the PID of the shell process running in this terminal,
+     * or 0 if no shell is running.
+     */
+    @property GPid shellPid() {
+        return gpid;
+    }
+
 // Events
 public:
     /**

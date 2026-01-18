@@ -4,14 +4,17 @@
  */
 module gx.tilix.application;
 
+import core.sys.posix.unistd : pid_t;
+
 import std.algorithm;
 import std.conv;
 import std.experimental.logger;
-import std.file;
+import std.file : read, exists;
 import std.format;
 import std.path;
 import std.process;
 import std.stdio;
+import std.string : split, indexOf, lastIndexOf;
 import std.variant;
 
 import cairo.ImageSurface;
@@ -71,6 +74,7 @@ import gx.tilix.cmdparams;
 import gx.tilix.common;
 import gx.tilix.constants;
 import gx.tilix.preferences;
+import gx.tilix.session;
 import gx.tilix.shortcuts;
 
 import gx.tilix.bookmark.manager;
@@ -123,6 +127,8 @@ private:
     bool useTabs = false;
 
     bool _processMonitor = false;
+
+    bool _skipActivation = false;
 
     CssProvider themeCssProvider;
 
@@ -364,6 +370,40 @@ private:
         if (cp.exit) {
             return cp.exitCode;
         }
+        // Handle --window-id-for-pid option
+        if (cp.windowIdForPid.length > 0) {
+            import gio.c.functions : g_application_command_line_print;
+            import std.string : toStringz;
+            _skipActivation = true;
+            try {
+                pid_t searchPid = to!pid_t(cp.windowIdForPid);
+                long windowId = getWindowIdForPid(searchPid);
+                g_application_command_line_print(acl.getApplicationCommandLineStruct(), "%ld\n", windowId);
+            } catch (Exception e) {
+                g_application_command_line_print(acl.getApplicationCommandLineStruct(), "Invalid PID: %s\n", toStringz(cp.windowIdForPid));
+                return 1;
+            }
+            return 0;
+        }
+        // Handle --focus-window-for-pid option
+        if (cp.focusWindowForPid.length > 0) {
+            import gio.c.functions : g_application_command_line_print;
+            import std.string : toStringz;
+            _skipActivation = true;
+            try {
+                pid_t searchPid = to!pid_t(cp.focusWindowForPid);
+                if (focusWindowForPid(searchPid)) {
+                    g_application_command_line_print(acl.getApplicationCommandLineStruct(), "Window focused\n");
+                } else {
+                    g_application_command_line_print(acl.getApplicationCommandLineStruct(), "PID not found in any terminal\n");
+                    return 1;
+                }
+            } catch (Exception e) {
+                g_application_command_line_print(acl.getApplicationCommandLineStruct(), "Invalid PID: %s\n", toStringz(cp.focusWindowForPid));
+                return 1;
+            }
+            return 0;
+        }
         if (cp.exitCode == 0 && cp.action.length > 0) {
             string terminalUUID = cp.terminalUUID;
             if (terminalUUID.length == 0) {
@@ -459,6 +499,11 @@ private:
 
     void onAppActivate(GApplication app) {
         trace("Activate App Signal");
+        if (_skipActivation) {
+            _skipActivation = false;
+            cp.clear();
+            return;
+        }
         if (!app.getIsRemote()) {
             if (cp.preferences) presentPreferences();
             else createAppWindow();
@@ -695,6 +740,8 @@ private:
         addMainOption(CMD_VERSION, 'v', GOptionFlags.NONE, GOptionArg.NONE, _("Show the Tilix and dependent component versions"), null);
         addMainOption(CMD_PREFERENCES, '\0', GOptionFlags.NONE, GOptionArg.NONE, _("Show the Tilix preferences dialog directly"), null);
         addMainOption(CMD_GROUP, 'g', GOptionFlags.NONE, GOptionArg.STRING, _("Group tilix instances into different processes (Experimental, not recommended)"), _("GROUP_NAME"));
+        addMainOption(CMD_WINDOW_ID_FOR_PID, '\0', GOptionFlags.NONE, GOptionArg.STRING, _("Print the window ID containing the given PID"), _("PID"));
+        addMainOption(CMD_FOCUS_WINDOW_FOR_PID, '\0', GOptionFlags.NONE, GOptionArg.STRING, _("Focus the window containing the given PID"), _("PID"));
 
         //Hidden options used to communicate with primary instance
         addMainOption(CMD_TERMINAL_UUID, '\0', GOptionFlags.HIDDEN, GOptionArg.STRING, _("Hidden argument to pass terminal UUID"), _("TERMINAL_UUID"));
@@ -782,6 +829,117 @@ public:
             }
         }
         return null;
+    }
+
+    /**
+     * Returns the X11 window ID (XID) for the window containing a process
+     * with the given PID. The PID can be either the shell process itself
+     * or any descendant process running in a terminal.
+     *
+     * Returns:
+     *   - The window XID if found (X11)
+     *   - 0 if running under Wayland (window ID not available)
+     *   - -1 if the PID is not found in any terminal
+     */
+    long getWindowIdForPid(pid_t searchPid) {
+        import gx.tilix.terminal.terminal : Terminal;
+        import gdk.Window : GdkWindow = Window;
+
+        foreach (window; appWindows) {
+            foreach (session; window.getAllSessions()) {
+                foreach (terminal; session.getTerminals()) {
+                    pid_t shellPid = terminal.shellPid;
+                    if (shellPid <= 0) continue;
+
+                    // Check if the search PID is the shell itself or a descendant
+                    if (isDescendantOf(searchPid, shellPid)) {
+                        // Found the terminal, now get the window ID
+                        if (isWayland(window)) {
+                            return 0; // Window ID not available under Wayland
+                        }
+
+                        GdkWindow gdkWindow = window.getWindow();
+                        if (gdkWindow !is null) {
+                            import gdk.X11 : getXid;
+                            return cast(long) getXid(gdkWindow);
+                        }
+                        return -1;
+                    }
+                }
+            }
+        }
+        return -1; // PID not found in any terminal
+    }
+
+    /**
+     * Focuses the window containing a process with the given PID.
+     * Works on both X11 and Wayland.
+     *
+     * Returns: true if the window was found and focused, false otherwise.
+     */
+    bool focusWindowForPid(pid_t searchPid) {
+        import gx.tilix.terminal.terminal : Terminal;
+
+        foreach (window; appWindows) {
+            foreach (session; window.getAllSessions()) {
+                foreach (terminal; session.getTerminals()) {
+                    pid_t shellPid = terminal.shellPid;
+                    if (shellPid <= 0) continue;
+
+                    // Check if the search PID is the shell itself or a descendant
+                    if (isDescendantOf(searchPid, shellPid)) {
+                        // Found the terminal, focus the window
+                        window.present();
+                        terminal.focusTerminal();
+                        return true;
+                    }
+                }
+            }
+        }
+        return false; // PID not found in any terminal
+    }
+
+    /**
+     * Checks if a PID is a descendant of (or equal to) an ancestor PID
+     * by traversing the process tree via /proc.
+     */
+    bool isDescendantOf(pid_t pid, pid_t ancestorPid) {
+        if (pid <= 0) return false;
+        if (pid == ancestorPid) return true;
+
+        // Walk up the process tree
+        pid_t currentPid = pid;
+        while (currentPid > 1) {
+            pid_t parentPid = getParentPid(currentPid);
+            if (parentPid == ancestorPid) return true;
+            if (parentPid <= 0 || parentPid == currentPid) break;
+            currentPid = parentPid;
+        }
+        return false;
+    }
+
+    /**
+     * Gets the parent PID of a process by reading /proc/[pid]/stat.
+     * Returns -1 if the process doesn't exist or can't be read.
+     */
+    pid_t getParentPid(pid_t pid) {
+        try {
+            string statPath = format("/proc/%d/stat", pid);
+            if (!exists(statPath)) return -1;
+
+            string data = to!string(cast(char[]) read(statPath));
+            // Format: pid (comm) state ppid ...
+            // Need to handle comm containing spaces/parens
+            size_t rpar = data.lastIndexOf(")");
+            if (rpar == -1 || rpar + 2 >= data.length) return -1;
+
+            string[] parts = data[rpar + 2 .. $].split();
+            if (parts.length < 2) return -1;
+
+            return to!pid_t(parts[1]); // ppid is the 4th field overall, 2nd after comm
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     void presentPreferences() {

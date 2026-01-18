@@ -1938,6 +1938,13 @@ public:
     }
 
     /**
+     * Returns all sessions in this window.
+     */
+    Session[] getAllSessions() {
+        return getSessions();
+    }
+
+    /**
      * Creates a new session and prompts the user for session properties
      */
     void createSession() {

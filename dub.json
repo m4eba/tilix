@@ -32,7 +32,7 @@
         {
             "name": "default",
             "targetType": "executable",
-            "libs-linux": ["X11"],
+            "libs-linux": ["X11", "z"],
             "versions": ["StdLoggerDisableTrace"]
         },
         {

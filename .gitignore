@@ -8,6 +8,7 @@ __dummy.html
 /tilix
 __test__library__
 .vscode
+.claude
 backup
 tilix.gresource
 data/pkg/arch/pkg

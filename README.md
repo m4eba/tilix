@@ -3,6 +3,40 @@
 # Tilix
 A tiling terminal emulator for Linux using GTK+ 3. The Tilix web site for users is available at [https://gnunn1.github.io/tilix-web](https://gnunn1.github.io/tilix-web).
 
+---
+
+### Fork Changes
+
+This fork adds the following features:
+
+#### Window lookup by PID
+
+Find which Tilix window contains a specific process:
+
+```bash
+# Get X11 window ID for a PID (returns 0 on Wayland, -1 if not found)
+tilix --window-id-for-pid=<PID>
+
+# Focus the window containing a PID (works on both X11 and Wayland)
+tilix --focus-window-for-pid=<PID>
+```
+
+**Use cases:**
+- IDE integration: focus the terminal running a specific process
+- Scripts: find which terminal window a background job is running in
+- Window managers: programmatically manage terminal windows
+
+**Example:**
+```bash
+# Focus the terminal containing the current shell
+tilix --focus-window-for-pid=$$
+
+# Get window ID and use with xdotool (X11 only)
+xdotool windowactivate $(tilix --window-id-for-pid=$$)
+```
+
+---
+
 > :warning: **Maintainers Wanted**<br/>
 > This project is looking for maintainers!
 > At the moment, only very minimal maintenance is done, no new features will be implemented and pull-requests may be reviewed very slowly.
