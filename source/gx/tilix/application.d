@@ -873,6 +873,7 @@ public:
 
     /**
      * Focuses the window containing a process with the given PID.
+     * Also switches to the correct tab/session and focuses the terminal.
      * Works on both X11 and Wayland.
      *
      * Returns: true if the window was found and focused, false otherwise.
@@ -888,8 +889,9 @@ public:
 
                     // Check if the search PID is the shell itself or a descendant
                     if (isDescendantOf(searchPid, shellPid)) {
-                        // Found the terminal, focus the window
+                        // Found the terminal - focus window, switch tab, focus terminal
                         window.present();
+                        window.activateSession(session.uuid);
                         terminal.focusTerminal();
                         return true;
                     }
